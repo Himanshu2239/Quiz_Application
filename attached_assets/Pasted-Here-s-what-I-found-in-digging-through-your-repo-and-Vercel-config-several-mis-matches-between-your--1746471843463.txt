@@ -1,0 +1,135 @@
+Here’s what I found in digging through your repo and Vercel config—several mis-matches between your build setup, TypeScript settings, and Vercel’s expectations that will cause build or runtime failures:
+
+1. Your Vercel buildCommand doesn’t run your custom build script
+In vercel.json you’ve set
+
+json
+Copy
+Edit
+"buildCommand": "npm run build",
+but you’ve also authored a build-vercel.sh that (1) runs the frontend build, (2) copies server files into dist/, and (3) compiles them with tsc.
+
+Problem: Vercel will never execute build-vercel.sh—it only runs npm run build, which invokes your package.json “build” script, not the specialized steps in build-vercel.sh.
+
+➔ Fix: Either
+
+Point Vercel at your shell script:
+
+diff
+Copy
+Edit
+// vercel.json
+"buildCommand": "./build-vercel.sh",
+Or fold build-vercel.sh’s steps into your package.json “build” script.
+
+2. Your TS compilation is being blocked by "noEmit": true
+In tsconfig.json you have
+
+json
+Copy
+Edit
+"compilerOptions": {
+  "noEmit": true,
+  …
+}
+Problem: Even if you call tsc --outDir dist/server, the noEmit flag prevents any .js from being written. Your server code (all in server/*.ts) never actually compiles to JS for Vercel to run.
+
+➔ Fix: Either remove noEmit or override it for your server compile. For example:
+
+diff
+Copy
+Edit
+// tsconfig.json
+  "compilerOptions": {
+-   "noEmit": true,
++   // emit server code for deployment
++   "noEmit": false,
+    …
+  }
+3. You’re listening on port 5000 in “server/index.ts”
+ts
+Copy
+Edit
+const port = 5000;
+server.listen(port, …);
+Vercel serverless functions must export a handler; they don’t let you spin up a persistent HTTP server on a custom port.
+
+Problem: That code is only for local/dev. It shouldn’t be used in the Vercel function entrypoint.
+
+You’ve actually mixed two approaches:
+
+A standalone Express app in server/index.ts, and
+
+A Vercel function in api/index.js which re-uses Express as a handler (the correct pattern).
+
+Recommendation:
+
+Strip out any .listen() calls from your api/ code.
+
+Use only the api/index.js serverless function (which does module.exports = (req, res) => app(req, res)), not the standalone server.
+
+4. vercel.json’s “functions” block is too narrow
+You’ve declared:
+
+json
+Copy
+Edit
+"functions": {
+  "api/index.js": { "memory": 1024, "maxDuration": 10 }
+}
+However you have multiple JS files in /api (e.g. hello.js, health.js, etc.). Only api/index.js will be built as a function—everything else will be ignored.
+
+➔ Fix: Either remove the explicit functions block (so Vercel auto-discovers all .js in /api), or add entries for each endpoint you need.
+
+5. Missing critical environment variables in vercel.json
+In your Vercel entrypoint you do:
+
+js
+Copy
+Edit
+const mongoUri = process.env.MONGO_DB;
+if (!mongoUri) throw new Error('MONGO_DB environment variable not set');
+Yet in vercel.json you only set:
+
+json
+Copy
+Edit
+"env": { "NODE_ENV": "production" }
+Problem: At runtime in Vercel your function will blow up because MONGO_DB is undefined.
+
+➔ Fix: Either
+
+Add MONGO_DB (and any others) to your vercel.json under env (if you’re comfortable checking them into code), e.g.
+
+json
+Copy
+Edit
+"env": {
+  "NODE_ENV": "production",
+  "MONGO_DB": "@mongo_db"    // use Vercel’s CLI secrets syntax
+}
+Or configure them in the Vercel Dashboard under Settings → Environment Variables.
+
+6. Static outputDirectory vs. serverless functions
+You’ve pointed Vercel at "outputDirectory": "dist/public", which is where your frontend build lands—fine for serving your React bundle. But make sure:
+
+Your static build really lives in dist/public (it does, per your vite.config.ts).
+
+Your functions live outside that folder—in /api—so they won’t be clobbered by the static output.
+
+If you ever move your frontend out of dist/public, update outputDirectory accordingly.
+
+Summary of Action Items
+Combine or override your build steps so Vercel actually runs:
+
+Either change buildCommand to ./build-vercel.sh, or merge its logic into npm run build.
+
+Disable noEmit in tsconfig.json (or use a separate tsconfig.server.json) so your server TS files compile.
+
+Remove server.listen(...) from any file packaged as a serverless function—your Express app must be invoked via module.exports = (req,res) => app(req,res).
+
+Broaden your functions block (or delete it) so all /api/*.js endpoints get deployed.
+
+Set your MONGO_DB (and any other) env vars in Vercel’s settings or in vercel.json.
+
+Once those are in place, your Vercel build should succeed (the frontend gets built to dist/public) and your API routes will run as serverless functions against your MongoDB Atlas instance. Let me know if you hit any specific errors after making these changes!

@@ -1,0 +1,14 @@
+{
+  "version": 2,
+  "buildCommand": "./build-vercel.sh",
+  "outputDirectory": "dist/public",
+  "routes": [
+    { "src": "/api/(.*)", "dest": "/api/[...slug].js" },
+    { "src": "/(.*)", "dest": "/$1" }
+  ],
+  "env": {
+    "NODE_ENV": "production",
+    "MONGO_DB": "mongodb+srv://vermaravifzd022:10EULEvReB6fdhyW@cluster0.g2bvjbh.mongodb.net",
+    "SESSION_SECRET": "computer-science-assessment-secret"
+  }
+}
